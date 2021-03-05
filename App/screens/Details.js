@@ -1,62 +1,42 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
-  ScrollView,
   SafeAreaView,
   View,
-  Alert,
   FlatList,
   StatusBar,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
 } from "react-native";
 import { format } from "date-fns";
 import * as Location from "expo-location";
 import * as Permissions from "expo-permissions";
 
-import { weatherApi } from "../util/weatherApi";
-import { BasicRow } from "../components/List";
-import { H1, H2, P } from "../components/Text";
-
 import LottieView from 'lottie-react-native';
+import { groupForecastByDay, normalize } from "../helper/helper";
+import Switch from "../components/Switch";
+import { connect } from "react-redux";
+import { getWeather, getForecast } from '../Action/actions'
 
-const groupForecastByDay = (list) => {
-  const data = {};
+function Details(props) {
 
-  list.forEach((item) => {
-    const [day] = item.dt_txt.split(" ");
-    if (data[day]) {
-      if (data[day].temp_max < item.main.temp_max) {
-        data[day].temp_max = item.main.temp_max;
-      }
+  const [currentWeather, setCurrentWeather] = useState({})
+  const [loadingCurrentWeather, setLodingCurrentWeather] = useState(true)
+  const [forecast, setForecast] = useState([])
+  const [loadingForecast, setLoadingForecast] = useState(true)
+  const [placeName, setPlaceName] = useState("")
+  const [isEnabled, setIsEnabled] = useState(false)
+  const [position, setPosition] = useState()
 
-      if (data[day].temp_min > item.main.temp_min) {
-        data[day].temp_min = item.main.temp_min;
-      }
-    } else {
-      data[day] = {
-        temp_min: item.main.temp_min,
-        temp_max: item.main.temp_max,
-      };
-    }
-  });
+  const { getWeather, currentData, forecastData, cityName, getForecast, error } = props;
 
-  const formattedList = Object.keys(data).map((key) => ({
-    day: key,
-    ...data[key],
-  }));
+  useEffect(() => {
+    fetchReport();
+  }, [])
 
-  return formattedList;
-};
-
-export default class Details extends React.Component {
-  state = {
-    currentWeather: {},
-    loadingCurrentWeather: true,
-    forecast: [],
-    loadingForecast: true,
-    placeName: ""
-  };
-
-  componentDidMount() {
+  function fetchReport() {
+    setLodingCurrentWeather(true);
+    setLoadingForecast(true);
     Permissions.askAsync(Permissions.LOCATION)
       .then(({ status }) => {
         if (status !== "granted") {
@@ -65,129 +45,178 @@ export default class Details extends React.Component {
         return Location.getCurrentPositionAsync();
       })
       .then((position) => {
-        this.getCurrentWeather({ coords: position.coords });
-        this.getForecast({ coords: position.coords });
+        setPosition(position.coords)
+        getWeather({ coords: position.coords });
+        getForecast({ coords: position.coords })
       });
   }
 
-  componentDidUpdate(prevProps) {
-    const oldLat = prevProps.navigation.getParam("lat");
-    const lat = this.props.navigation.getParam("lat");
-
-    const oldLon = prevProps.navigation.getParam("lon");
-    const lon = this.props.navigation.getParam("lon");
-
-    const oldZipcode = prevProps.navigation.getParam("zipcode");
-    const zipcode = this.props.navigation.getParam("zipcode");
-
-    if (lat && oldLat !== lat && lon && oldLon !== lon) {
-      this.getCurrentWeather({ coords: { latitude: lat, longitude: lon } });
-      this.getForecast({ coords: { latitude: lat, longitude: lon } });
-    } else if (zipcode && oldZipcode !== zipcode) {
-      this.getCurrentWeather({ zipcode });
-      this.getForecast({ zipcode });
+  useEffect(() => {
+    if (currentData) {
+      setCurrentWeather(currentData);
+      setPlaceName(cityName);
+      setLodingCurrentWeather(false);
     }
-  }
+    if (forecastData) {
+      setForecast(groupForecastByDay(forecastData.list))
+      setLoadingForecast(false);
+    }
+  }, [currentData, forecastData, cityName])
 
-  handleError = () => {
-    Alert.alert("No location data found!", "Please try again", [
-      {
-        text: "Okay",
-        onPress: () => this.props.navigation.navigate("Search"),
-      },
-    ]);
-  };
-
-  getCurrentWeather = ({ zipcode, coords }) =>
-    weatherApi("/weather", { zipcode, coords })
-      .then((resp) => {
-        let response = resp.data
-        if (response.cod === "404") {
-          this.handleError();
-        } else {
-          this.props.navigation.setParams({ title: response.name });
-          this.setState({
-            currentWeather: response,
-            loadingCurrentWeather: false,
-            placeName: response.name
-          });
-        }
-      })
-      .catch((err) => {
-        console.log("current error", err);
-        this.handleError();
-      });
-
-  getForecast = ({ zipcode, coords }) =>
-    weatherApi("/forecast", { zipcode, coords })
-      .then((resp) => {
-        let response = resp.data
-        console.log(response)
-        if (response.cod !== "404") {
-          this.setState({
-            loadingForecast: false,
-            forecast: groupForecastByDay(response.list),
-          });
-        }
-      })
-      .catch((err) => {
-        console.log("forecast error", err);
-      });
-
-  _renderItem({ item, index }) {
-    console.log(day)
+  const _renderItem = ({ item, index }) => {
     let day = item;
+    let temp = Math.round(day.temp_max)
+    if (!isEnabled)
+      temp = Math.round((temp - 32) * 5 / 9)
     return (
-      <BasicRow
+      <View
         key={index}
-        style={{ justifyContent: "space-between", width: '100%', paddingVertical: 10, alignItems: 'center', paddingHorizontal: 20 }}
+        style={styles.listItems}
       >
-        <P>{format(new Date(day.day), "EEEE, MMM d")}</P>
+        <Text style={styles.forcastDay}>{format(new Date(day.day), "EEEE, MMM d")}</Text>
         <View style={{ flexDirection: "row" }}>
-          <P style={{ fontWeight: "700", marginRight: 10 }}>
-            {Math.round(day.temp_max)}°F
-          </P>
+          <Text style={styles.listTemp}>
+            {temp}°{isEnabled ? "F" : "C"}
+          </Text>
         </View>
-      </BasicRow>
+      </View>
     )
   }
 
-  render() {
-    if (this.state.loadingCurrentWeather || this.state.loadingForecast) {
-      return (
-        <View style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', backgroundColor: '#3145b7' }}>
-          <LottieView
-            autoPlay
-            loop
-            style={{
-              width: 80,
-              height: 80,
-            }}
-            source={require('../assets/splashyLoader.json')}
-          />
-        </View>
-      );
-    }
+  function toggleSwitch() {
+    setIsEnabled(!isEnabled)
+  }
 
-    const { main } = this.state.currentWeather;
-
+  if (error) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#3145b7' }}>
-        <StatusBar barStyle="light-content" />
-        <View style={{ width: '100%', height: '55%', alignItems: 'center', justifyContent: 'center' }}>
-          <H1>{`${Math.round(main.temp)}°F`}</H1>
-          <H2>{`${this.state.placeName}`}</H2>
-        </View>
+      <SafeAreaView style={{ ...styles.container, ...styles.errorContainer }}>
+        <Text style={styles.temperature}>{`Something\nWent Wrong\nat our End!`}</Text>
 
-        <View style={{ width: '100%', height: '45%', justifyContent: 'flex-end' }}>
-
-          <FlatList
-            data={this.state.forecast}
-            renderItem={this._renderItem}
-            ListHeaderComponent={() => (<View style={{ width: '100%', height: 1, backgroundColor: 'white' }} />)}
-            ItemSeparatorComponent={() => (<View style={{ width: '100%', height: 1, backgroundColor: 'white' }} />)} />
-        </View>
+        <TouchableOpacity style={styles.retry} onPress={fetchReport}>
+          <Text style={styles.retryText}>Retry</Text>
+        </TouchableOpacity>
       </SafeAreaView>
+    )
+  }
+
+  if (loadingCurrentWeather || loadingForecast) {
+    return (
+      <View style={styles.loaderContainer}>
+        <LottieView
+          autoPlay
+          loop
+          style={styles.lottie}
+          source={require('../assets/splashyLoader.json')}
+        />
+      </View>
     );
   }
+
+  const { main } = currentWeather;
+  let weather = Math.round(main.temp)
+  if (!isEnabled)
+    weather = Math.round((weather - 32) * 5 / 9)
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" />
+      <Switch value={isEnabled} onChange={toggleSwitch} />
+      <View style={styles.currentReport}>
+        <Text style={styles.temperature}>{`${weather}°${isEnabled ? "F" : "C"}`}</Text>
+        <Text style={styles.cityName}>{`${placeName}`}</Text>
+      </View>
+
+
+      <View style={styles.flatlistContainer}>
+        <FlatList
+          data={forecast}
+          renderItem={_renderItem}
+          ListHeaderComponent={() => (<View style={{ width: '100%', height: 1, backgroundColor: 'white' }} />)}
+          ItemSeparatorComponent={() => (<View style={{ width: '100%', height: 1, backgroundColor: 'white' }} />)}
+          keyExtractor={(item, index) => index.toString()} />
+      </View>
+    </SafeAreaView>
+  );
 }
+
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#3c4d93'
+  },
+  errorContainer: {
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  currentReport: {
+    width: '100%',
+    height: '55%',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  temperature: {
+    color: 'white',
+    fontSize: normalize(50)
+  },
+  cityName: {
+    color: 'white',
+    fontSize: normalize(20)
+  },
+  listItems: {
+    justifyContent: "space-between",
+    width: '100%',
+    paddingVertical: normalize(15),
+    alignItems: 'center',
+    paddingHorizontal: normalize(20),
+    flexDirection: 'row'
+  },
+  flatlistContainer: {
+    width: '100%',
+    justifyContent: 'flex-end',
+    position: 'absolute',
+    bottom: 0
+  },
+  forcastDay: {
+    fontSize: normalize(16),
+    color: 'white'
+  },
+  listTemp: {
+    fontWeight: "700",
+    color: 'white',
+    fontSize: normalize(17)
+  },
+  loaderContainer: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3c4d93'
+  },
+  lottie: {
+    width: normalize(80),
+    height: normalize(80),
+  },
+  retry: {
+    paddingHorizontal: normalize(30),
+    marginTop: normalize(50),
+    borderWidth: 1,
+    borderColor: '#fff',
+    paddingVertical: normalize(10)
+  },
+  retryText: {
+    fontSize: normalize(16),
+    color: '#fff'
+  }
+})
+
+const mapStateToProps = (state) => {
+  return ({
+    currentData: state.currentData,
+    cityName: state.cityName,
+    forecastData: state.forecastData,
+    error: state.error
+  })
+};
+
+export default connect(mapStateToProps, { getWeather, getForecast })(Details);
